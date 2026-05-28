@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PinPoint — GIS Explorer</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Plus Jakarta Sans', 'sans-serif'], mono: ['DM Mono', 'monospace'] },
+          colors: {
+            brand: { 50:'#f0fdf9',100:'#ccfbef',200:'#99f6e0',300:'#5eead4',400:'#2dd4bf',500:'#14b8a6',600:'#0d9488',700:'#0f766e',800:'#115e59',900:'#134e4a' },
+            ink: { DEFAULT:'#0d1117', soft:'#161b22', muted:'#30363d', border:'#21262d' },
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background: #0d1117; color: #e6edf3; margin: 0; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+    #map { flex: 1; z-index: 1; }
+    .leaflet-container { background: #1c2128; }
+
+    /* Custom popups */
+    .leaflet-popup-content-wrapper { background: #161b22 !important; border: 1px solid #30363d !important; border-radius: 12px !important; box-shadow: 0 8px 32px rgba(0,0,0,0.6) !important; color: #e6edf3 !important; padding: 0 !important; overflow: hidden; }
+    .leaflet-popup-tip-container { display: none; }
+    .leaflet-popup-content { margin: 0 !important; min-width: 210px; }
+    .leaflet-popup-close-button { color: #8b949e !important; top: 8px !important; right: 8px !important; font-size: 18px !important; z-index: 10; }
+
+    /* Sidebar */
+    #sidebar { background: #161b22; border-top: 1px solid #21262d; height: 44vh; flex-shrink: 0; display: flex; flex-direction: column; }
+    @media (min-width: 768px) {
+      body { flex-direction: row; }
+      #sidebar { border-top: none; border-left: 1px solid #21262d; width: 320px; height: 100vh; }
+      #map { flex: 1; }
+    }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+
+    /* Toast */
+    #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #14b8a6; color: #fff; padding: 10px 20px; border-radius: 999px; font-size: 13px; font-weight: 600; z-index: 9999; opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; box-shadow: 0 4px 20px rgba(20,184,166,0.4); }
+    #toast.show { opacity: 1; }
+
+    /* Modal */
+    #modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 9000; display: none; align-items: center; justify-content: center; padding: 16px; }
+    #modal-overlay.show { display: flex; }
+    #modal { background: #161b22; border: 1px solid #30363d; border-radius: 16px; width: 100%; max-width: 380px; }
+
+    /* Map cursor when add-mode */
+    #map.adding { cursor: crosshair !important; }
+    .leaflet-container.adding { cursor: crosshair !important; }
+
+    /* Add mode banner */
+    #add-mode-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 500; background: #14b8a6; color: #fff; padding: 8px 18px; border-radius: 999px; font-size: 13px; font-weight: 700; pointer-events: none; box-shadow: 0 4px 16px rgba(20,184,166,0.5); display: none; white-space: nowrap; }
+
+    .leaflet-routing-container { display: none !important; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin .7s linear infinite; }
+
+    input { outline: none; }
+    
+
+
+    /* User Live Location Marker */
+.user-loc-marker {
+  background: #3b82f6; /* Warna biru */
+  border: 3px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.8);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+  70% { box-shadow: 0 0 0 15px rgba(59, 130, 246, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+  </style>
+</head>
+<body>
+
+<!-- MAP WRAPPER -->
+<div style="position:relative; flex:1; display:flex; flex-direction:column;">
+  <div id="map"></div>
+  <div id="add-mode-banner">✚ Klik peta untuk menempatkan pin</div>
+</div>
+
+<!-- SIDEBAR -->
+<div id="sidebar">
+  <!-- Header & Search -->
+  <div class="p-3 border-b border-ink-border flex-shrink-0 space-y-2">
+    <div class="flex items-center gap-2">
+      <div class="w-7 h-7 rounded-lg bg-brand-600 flex items-center justify-center text-sm">📍</div>
+      <span class="font-bold text-base tracking-tight">PinPoint</span>
+      <span class="ml-auto text-xs font-mono text-brand-400" id="pin-count">0 pin</span>
+      <!-- ADD PIN BUTTON -->
+      <button id="add-pin-btn" title="Tambah Pin" class="flex items-center gap-1.5 bg-brand-600 hover:bg-brand-500 active:bg-brand-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors">
+        ✚ Pin
+      </button>
+    </div>
+    <!-- Search -->
+    <div class="relative">
+      <input id="search-input" type="search" placeholder="Cari lokasi…"
+        class="w-full bg-ink-soft border border-ink-border rounded-xl px-4 py-2 pr-9 text-sm placeholder-gray-500 focus:border-brand-500 transition-colors" />
+      <button id="search-btn" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-brand-400 transition-colors p-1">
+        <svg id="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <svg id="search-spinner" class="hidden spin" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      </button>
+    </div>
+    <div class="pt-1">
+      <button id="gps-btn" class="w-full flex items-center justify-center gap-2 bg-ink-soft border border-ink-border hover:border-brand-500 hover:text-brand-400 text-gray-400 text-xs font-semibold py-2.5 rounded-xl transition-all">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+        <span id="gps-text">Mulai Lacak Lokasi Saya</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Route Panel -->
+  <div class="px-3 py-2.5 border-b border-ink-border flex-shrink-0">
+    <div class="flex items-center justify-between mb-2">
+      <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Rute</span>
+      <button id="clear-route-btn" class="text-xs text-red-400 hover:text-red-300 transition-colors hidden">Hapus Rute</button>
+    </div>
+    <div class="flex gap-2 mb-2">
+      <div class="flex-1 bg-ink-soft rounded-lg p-2 text-xs border border-ink-border min-w-0">
+        <div class="text-gray-500 mb-0.5">Start</div>
+        <div id="route-start-label" class="text-brand-400 font-mono truncate">—</div>
+      </div>
+      <div class="flex items-center text-gray-600 text-lg">→</div>
+      <div class="flex-1 bg-ink-soft rounded-lg p-2 text-xs border border-ink-border min-w-0">
+        <div class="text-gray-500 mb-0.5">Tujuan</div>
+        <div id="route-end-label" class="text-orange-400 font-mono truncate">—</div>
+      </div>
+    </div>
+    <button id="make-route-btn" class="w-full bg-brand-700 hover:bg-brand-600 text-white text-xs font-bold py-2 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+      🗺️ Buat Rute
+    </button>
+  </div>
+
+  <!-- Pin List -->
+  <div class="flex-1 overflow-y-auto p-2" id="pin-list-container">
+    <div id="empty-state" class="flex flex-col items-center justify-center h-20 text-center">
+      <p class="text-xs text-gray-500">Tekan <strong class="text-brand-400">✚ Pin</strong> lalu klik peta</p>
+    </div>
+    <div id="pin-list" class="space-y-1.5"></div>
+  </div>
+</div>
+
+<!-- MODAL: Add / Edit Pin -->
+<div id="modal-overlay">
+  <div id="modal">
+    <div class="p-4 border-b border-ink-border flex items-center justify-between">
+      <h2 class="font-bold text-base" id="modal-title">Tambah Pin Baru</h2>
+      <button id="modal-x" class="text-gray-500 hover:text-white transition-colors text-xl leading-none">×</button>
+    </div>
+    <div class="p-4 space-y-4">
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 mb-1.5">Nama Lokasi</label>
+        <input id="modal-name" type="text" placeholder="contoh: Rumah, Kafe, Kantor…"
+          class="w-full bg-ink-soft border border-ink-border rounded-xl px-4 py-2.5 text-sm focus:border-brand-500 transition-colors" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 mb-2">Ikon</label>
+        <div id="icon-picker" class="grid grid-cols-6 gap-1.5"></div>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-400 mb-2">Warna</label>
+        <div id="color-picker" class="flex gap-2.5"></div>
+      </div>
+    </div>
+    <div class="p-4 pt-0 flex gap-3">
+      <button id="modal-cancel" class="flex-1 bg-ink-soft border border-ink-border text-sm font-semibold py-2.5 rounded-xl hover:bg-ink-muted transition-colors">Batal</button>
+      <button id="modal-save" class="flex-1 bg-brand-600 hover:bg-brand-500 active:bg-brand-700 text-white text-sm font-semibold py-2.5 rounded-xl transition-colors">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.min.js"></script>
+
+<script>
+// ── CONFIG ──────────────────────────────────────────────
+const ICONS = [
+  { emoji:'📍', label:'Pin' }, { emoji:'🏠', label:'Rumah' },
+  { emoji:'☕', label:'Kafe' }, { emoji:'🏢', label:'Kantor' },
+  { emoji:'🏪', label:'Toko' }, { emoji:'🏥', label:'RS/Klinik' },
+  { emoji:'🏫', label:'Sekolah' }, { emoji:'⛽', label:'SPBU' },
+  { emoji:'🍜', label:'Resto' }, { emoji:'🏦', label:'Bank' },
+  { emoji:'🌳', label:'Taman' }, { emoji:'⭐', label:'Favorit' },
+];
+const COLORS = [
+  { id:'teal',   bg:'#14b8a6', ring:'#5eead4' },
+  { id:'orange', bg:'#f97316', ring:'#fdba74' },
+  { id:'rose',   bg:'#f43f5e', ring:'#fda4af' },
+  { id:'violet', bg:'#8b5cf6', ring:'#c4b5fd' },
+  { id:'amber',  bg:'#f59e0b', ring:'#fcd34d' },
+  { id:'sky',    bg:'#0ea5e9', ring:'#7dd3fc' },
+];
+const STORAGE_KEY = 'pinpoint_v3';
+
+// ── STATE ────────────────────────────────────────────────
+let pins = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let leafletMarkers = {};
+let routeControl = null;
+let routeStart = null;
+let routeEnd = null;
+let editingPinId = null;
+let selectedIcon = ICONS[0];
+let selectedColor = COLORS[0];
+let modalMode = 'add';
+let pendingLatLng = null;
+let addMode = false;  // ← when true, next map click = place pin
+
+// ── MAP ──────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: false }).setView([-7.2575, 112.7521], 13);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19
+}).addTo(map);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// ── UTILS ────────────────────────────────────────────────
+function showToast(msg, color) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = color || '#14b8a6';
+  t.style.boxShadow = `0 4px 20px ${color ? color + '66' : 'rgba(20,184,166,0.4)'}`;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2800);
+}
+function savePins() { localStorage.setItem(STORAGE_KEY, JSON.stringify(pins)); }
+function genId() { return 'p' + Date.now() + Math.random().toString(36).slice(2,6); }
+function getPin(id) { return pins.find(p => p.id === id); }
+
+// ── ADD MODE TOGGLE ──────────────────────────────────────
+function setAddMode(on) {
+  addMode = on;
+  const banner = document.getElementById('add-mode-banner');
+  const btn = document.getElementById('add-pin-btn');
+  const mapEl = document.getElementById('map');
+  banner.style.display = on ? 'block' : 'none';
+  mapEl.style.cursor = on ? 'crosshair' : '';
+  document.querySelector('.leaflet-container').style.cursor = on ? 'crosshair' : '';
+  btn.textContent = on ? '✕ Batal' : '✚ Pin';
+  btn.className = on
+    ? 'flex items-center gap-1.5 bg-red-700 hover:bg-red-600 active:bg-red-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors'
+    : 'flex items-center gap-1.5 bg-brand-600 hover:bg-brand-500 active:bg-brand-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition-colors';
+}
+
+document.getElementById('add-pin-btn').addEventListener('click', () => setAddMode(!addMode));
+
+// ── MAP CLICK ────────────────────────────────────────────
+map.on('click', (e) => {
+  if (!addMode) return;
+  setAddMode(false);
+  openAddModal(e.latlng);
+});
+
+// ── ICON / COLOR PICKERS ──────────────────────────────────
+function renderIconPicker() {
+  const c = document.getElementById('icon-picker');
+  c.innerHTML = '';
+  ICONS.forEach(ic => {
+    const btn = document.createElement('button');
+    const active = selectedIcon.emoji === ic.emoji;
+    btn.className = `aspect-square rounded-xl text-xl flex items-center justify-center border-2 transition-all ${active ? 'border-brand-400 bg-brand-900/40 scale-110' : 'border-ink-border bg-ink-soft hover:border-brand-600'}`;
+    btn.textContent = ic.emoji;
+    btn.title = ic.label;
+    btn.onclick = () => { selectedIcon = ic; renderIconPicker(); };
+    c.appendChild(btn);
+  });
+}
+function renderColorPicker() {
+  const c = document.getElementById('color-picker');
+  c.innerHTML = '';
+  COLORS.forEach(col => {
+    const btn = document.createElement('button');
+    btn.style.cssText = `width:28px;height:28px;border-radius:50%;background:${col.bg};border:2px solid ${selectedColor.id===col.id ? col.ring : 'transparent'};transform:${selectedColor.id===col.id?'scale(1.25)':'scale(1)'};transition:all .15s;`;
+    btn.onclick = () => { selectedColor = col; renderColorPicker(); };
+    c.appendChild(btn);
+  });
+}
+
+// ── LEAFLET ICON ─────────────────────────────────────────
+function createLeafletIcon(pin) {
+  const col = COLORS.find(c => c.id === pin.color) || COLORS[0];
+  const isStart = routeStart === pin.id;
+  const isEnd   = routeEnd   === pin.id;
+  const ring = isStart ? '#22c55e' : isEnd ? '#f97316' : null;
+  const ringStyle = ring ? `box-shadow:0 0 0 3px ${ring}55, 0 4px 12px rgba(0,0,0,0.5);border-color:${ring};` : 'box-shadow:0 4px 12px rgba(0,0,0,0.5);border-color:rgba(255,255,255,0.25);';
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:36px;height:36px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:${col.bg};display:flex;align-items:center;justify-content:center;border:2px solid;${ringStyle}">
+             <span style="transform:rotate(45deg);font-size:16px;line-height:1;">${pin.icon}</span>
+           </div>`,
+    iconSize: [36, 36],
+    iconAnchor: [18, 36],
+    popupAnchor: [0, -40],
+  });
+}
+
+function buildPopupHTML(pin) {
+  return `<div style="padding:12px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <span style="font-size:22px;">${pin.icon}</span>
+      <span style="font-weight:700;font-size:14px;color:#fff;">${pin.name}</span>
+    </div>
+    <div style="font-size:11px;color:#6b7280;font-family:monospace;margin-bottom:10px;">${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
+      <button onclick="setRoutePoint('${pin.id}','start')" style="background:#14532d55;border:1px solid #16a34a55;color:#4ade80;font-size:12px;font-weight:600;padding:6px;border-radius:8px;cursor:pointer;font-family:inherit;">🟢 Start</button>
+      <button onclick="setRoutePoint('${pin.id}','end')" style="background:#7c2d1255;border:1px solid #ea580c55;color:#fb923c;font-size:12px;font-weight:600;padding:6px;border-radius:8px;cursor:pointer;font-family:inherit;">🔴 Tujuan</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+      <button onclick="openEditModal('${pin.id}')" style="background:#30363d;border:1px solid #484f58;color:#e6edf3;font-size:12px;font-weight:600;padding:6px;border-radius:8px;cursor:pointer;font-family:inherit;">✏️ Edit</button>
+      <button onclick="deletePin('${pin.id}')" style="background:#4c0519aa;border:1px solid #9f1239aa;color:#fda4af;font-size:12px;font-weight:600;padding:6px;border-radius:8px;cursor:pointer;font-family:inherit;">🗑️ Hapus</button>
+    </div>
+  </div>`;
+}
+
+function addMarkerToMap(pin) {
+  const m = L.marker([pin.lat, pin.lng], { icon: createLeafletIcon(pin) })
+    .bindPopup(buildPopupHTML(pin), { maxWidth: 230, minWidth: 220, closeButton: true })
+    .addTo(map);
+  leafletMarkers[pin.id] = m;
+}
+function refreshMarker(id) {
+  const pin = getPin(id);
+  if (!pin || !leafletMarkers[id]) return;
+  leafletMarkers[id].setIcon(createLeafletIcon(pin));
+  leafletMarkers[id].setPopupContent(buildPopupHTML(pin));
+}
+
+// ── PIN LIST ─────────────────────────────────────────────
+function renderPinList() {
+  const list = document.getElementById('pin-list');
+  const empty = document.getElementById('empty-state');
+  document.getElementById('pin-count').textContent = `${pins.length} pin`;
+  list.innerHTML = '';
+  if (!pins.length) { empty.style.display = 'flex'; return; }
+  empty.style.display = 'none';
+  pins.forEach(pin => {
+    const col = COLORS.find(c => c.id === pin.color) || COLORS[0];
+    const isStart = routeStart === pin.id;
+    const isEnd   = routeEnd   === pin.id;
+    const badge = isStart ? `<span style="font-size:10px;font-weight:700;color:#4ade80;background:#14532d55;padding:1px 5px;border-radius:4px;">START</span>`
+                : isEnd   ? `<span style="font-size:10px;font-weight:700;color:#fb923c;background:#7c2d1255;padding:1px 5px;border-radius:4px;">END</span>` : '';
+    const el = document.createElement('div');
+    el.className = 'flex items-center gap-2.5 bg-ink-soft rounded-xl px-3 py-2 cursor-pointer hover:bg-ink-muted transition-colors border border-ink-border group';
+    el.innerHTML = `
+      <div style="width:32px;height:32px;border-radius:50%;background:${col.bg}22;border:1.5px solid ${col.bg}66;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;">${pin.icon}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;color:#e6edf3;display:flex;align-items:center;gap:5px;" class="truncate">${pin.name} ${badge}</div>
+        <div style="font-size:10px;color:#6b7280;font-family:monospace;">${pin.lat.toFixed(4)}, ${pin.lng.toFixed(4)}</div>
+      </div>
+      <button onclick="event.stopPropagation();deletePin('${pin.id}')" class="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all p-1" style="flex-shrink:0;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3,6 5,6 21,6"/><path d="M19,6l-1,14H6L5,6"/><path d="M9,6V4h6v2"/></svg>
+      </button>`;
+    el.addEventListener('click', () => {
+      map.flyTo([pin.lat, pin.lng], 16, { duration: 0.8 });
+      setTimeout(() => leafletMarkers[pin.id]?.openPopup(), 900);
+    });
+    list.appendChild(el);
+  });
+}
+
+// ── MODAL ────────────────────────────────────────────────
+function openAddModal(latlng) {
+  pendingLatLng = latlng;
+  editingPinId = null;
+  modalMode = 'add';
+  selectedIcon = ICONS[0];
+  selectedColor = COLORS[0];
+  document.getElementById('modal-title').textContent = 'Tambah Pin Baru';
+  document.getElementById('modal-name').value = '';
+  renderIconPicker();
+  renderColorPicker();
+  document.getElementById('modal-overlay').classList.add('show');
+  setTimeout(() => document.getElementById('modal-name').focus(), 150);
+}
+function openEditModal(pinId) {
+  map.closePopup();
+  const pin = getPin(pinId);
+  if (!pin) return;
+  editingPinId = pinId;
+  modalMode = 'edit';
+  selectedIcon = ICONS.find(i => i.emoji === pin.icon) || ICONS[0];
+  selectedColor = COLORS.find(c => c.id === pin.color) || COLORS[0];
+  document.getElementById('modal-title').textContent = 'Edit Pin';
+  document.getElementById('modal-name').value = pin.name;
+  renderIconPicker();
+  renderColorPicker();
+  document.getElementById('modal-overlay').classList.add('show');
+  setTimeout(() => document.getElementById('modal-name').focus(), 150);
+}
+window.openEditModal = openEditModal;
+
+function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
+
+function saveModal() {
+  const name = document.getElementById('modal-name').value.trim();
+  if (!name) { showToast('⚠️ Isi nama lokasi dulu!', '#f59e0b'); document.getElementById('modal-name').focus(); return; }
+  if (modalMode === 'add' && pendingLatLng) {
+    const pin = { id: genId(), name, icon: selectedIcon.emoji, color: selectedColor.id, lat: pendingLatLng.lat, lng: pendingLatLng.lng };
+    pins.push(pin);
+    savePins();
+    addMarkerToMap(pin);
+    renderPinList();
+    showToast(`📍 "${name}" ditambahkan!`);
+    setTimeout(() => leafletMarkers[pin.id]?.openPopup(), 200);
+  } else if (modalMode === 'edit' && editingPinId) {
+    const pin = getPin(editingPinId);
+    if (pin) { pin.name = name; pin.icon = selectedIcon.emoji; pin.color = selectedColor.id; savePins(); refreshMarker(editingPinId); renderPinList(); updateRouteLabels(); showToast(`✏️ "${name}" diperbarui!`); }
+  }
+  closeModal();
+}
+
+document.getElementById('modal-save').addEventListener('click', saveModal);
+document.getElementById('modal-cancel').addEventListener('click', closeModal);
+document.getElementById('modal-x').addEventListener('click', closeModal);
+document.getElementById('modal-overlay').addEventListener('click', (e) => { if (e.target === document.getElementById('modal-overlay')) closeModal(); });
+document.getElementById('modal-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveModal(); });
+
+// ── DELETE ───────────────────────────────────────────────
+function deletePin(pinId) {
+  map.closePopup();
+  const pin = getPin(pinId);
+  if (!pin) return;
+  if (leafletMarkers[pinId]) { map.removeLayer(leafletMarkers[pinId]); delete leafletMarkers[pinId]; }
+  pins = pins.filter(p => p.id !== pinId);
+  if (routeStart === pinId) routeStart = null;
+  if (routeEnd   === pinId) routeEnd   = null;
+  clearRouteOnMap();
+  savePins(); renderPinList(); updateRouteLabels(); checkRouteReady();
+  showToast('🗑️ Pin dihapus', '#f43f5e');
+}
+window.deletePin = deletePin;
+
+// ── ROUTE ────────────────────────────────────────────────
+function setRoutePoint(pinId, type) {
+  map.closePopup();
+  const pin = getPin(pinId);
+  if (!pin) return;
+  const prev = type === 'start' ? routeStart : routeEnd;
+  if (type === 'start') routeStart = pinId; else routeEnd = pinId;
+  if (prev && prev !== pinId) refreshMarker(prev);
+  refreshMarker(pinId);
+  renderPinList(); updateRouteLabels(); checkRouteReady();
+  showToast(type === 'start' ? `🟢 "${pin.name}" → Start` : `🔴 "${pin.name}" → Tujuan`);
+}
+window.setRoutePoint = setRoutePoint;
+
+function updateRouteLabels() {
+  const s = routeStart ? getPin(routeStart) : null;
+  const e = routeEnd   ? getPin(routeEnd)   : null;
+  document.getElementById('route-start-label').textContent = s ? s.name : '—';
+  document.getElementById('route-end-label').textContent   = e ? e.name : '—';
+}
+function checkRouteReady() {
+  document.getElementById('make-route-btn').disabled = !(routeStart && routeEnd);
+}
+function clearRouteOnMap() {
+  if (routeControl) { map.removeControl(routeControl); routeControl = null; }
+  document.getElementById('clear-route-btn').classList.add('hidden');
+}
+function buildRoute() {
+  if (!routeStart || !routeEnd) return;
+  const s = getPin(routeStart), e = getPin(routeEnd);
+  if (!s || !e) return;
+  clearRouteOnMap();
+  routeControl = L.Routing.control({
+    waypoints: [L.latLng(s.lat, s.lng), L.latLng(e.lat, e.lng)],
+    router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' }),
+    lineOptions: { styles: [{ color:'#14b8a6', weight:5, opacity:.85 }], addWaypoints:false },
+    createMarker: () => null,
+    show: false,
+    fitSelectedRoutes: true,
+  }).addTo(map);
+  routeControl.on('routesfound', (ev) => {
+    const dist = (ev.routes[0].summary.totalDistance/1000).toFixed(2);
+    const mins = Math.round(ev.routes[0].summary.totalTime/60);
+    showToast(`🗺️ ${dist} km · ±${mins} menit`);
+    document.getElementById('clear-route-btn').classList.remove('hidden');
+  });
+  routeControl.on('routingerror', () => showToast('⚠️ Rute tidak ditemukan', '#f59e0b'));
+}
+function toggleTracking() {
+  if (!navigator.geolocation) {
+    showToast('⚠️ Geolocation tidak didukung browser ini', '#f43f5e');
+    return;
+  }
+
+  const gpsText = document.getElementById('gps-text');
+
+  if (isTracking) {
+    // Matikan Tracking
+    navigator.geolocation.clearWatch(watchId);
+    if (userMarker) {
+      map.removeLayer(userMarker);
+      userMarker = null;
+    }
+    isTracking = false;
+    
+    // Kembalikan ke mode non-aktif
+    gpsBtn.classList.remove('text-brand-400', 'border-brand-500', 'bg-brand-900/20');
+    gpsBtn.classList.add('text-gray-400', 'border-ink-border', 'bg-ink-soft');
+    gpsText.textContent = 'Mulai Lacak Lokasi Saya';
+    showToast('📍 Lacak lokasi dimatikan');
+  } else {
+    // Nyalakan Tracking
+    isTracking = true;
+    
+    // Ubah style tombol agar terlihat sedang aktif
+    gpsBtn.classList.add('text-brand-400', 'border-brand-500', 'bg-brand-900/20');
+    gpsBtn.classList.remove('text-gray-400', 'border-ink-border', 'bg-ink-soft');
+    gpsText.textContent = 'Berhenti Melacak';
+    showToast('Mencari lokasi...', '#3b82f6');
+
+    // Proses pemantauan watchPosition
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+
+        if (!userMarker) {
+          const userIcon = L.divIcon({
+            className: 'user-loc-marker',
+            iconSize: [18, 18],
+            iconAnchor: [9, 9]
+          });
+          userMarker = L.marker([lat, lng], { icon: userIcon, zIndexOffset: 1000 }).addTo(map);
+          map.flyTo([lat, lng], 16, { duration: 1.5 });
+          showToast('📍 Lokasi ditemukan!', '#3b82f6');
+        } else {
+          userMarker.setLatLng([lat, lng]);
+        }
+      },
+      (err) => {
+        console.error(err);
+        showToast('⚠️ Gagal melacak lokasi', '#f43f5e');
+        toggleTracking(); // Reset UI jika error
+      },
+      { 
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 10000
+      }
+    );
+  }
+}
+
+document.getElementById('make-route-btn').addEventListener('click', buildRoute);
+document.getElementById('clear-route-btn').addEventListener('click', () => {
+  clearRouteOnMap(); routeStart = null; routeEnd = null;
+  pins.forEach(p => refreshMarker(p.id));
+  renderPinList(); updateRouteLabels(); checkRouteReady();
+});
+
+// ── SEARCH ───────────────────────────────────────────────
+async function searchLocation(q) {
+  if (!q.trim()) return;
+  document.getElementById('search-icon').classList.add('hidden');
+  document.getElementById('search-spinner').classList.remove('hidden');
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`);
+    const data = await res.json();
+    if (data.length > 0) {
+      map.flyTo([+data[0].lat, +data[0].lon], 15, { duration: 1.2 });
+      showToast(`🔍 ${data[0].display_name.split(',').slice(0,2).join(', ')}`);
+    } else { showToast('❌ Lokasi tidak ditemukan', '#f43f5e'); }
+  } catch { showToast('⚠️ Gagal mencari lokasi', '#f59e0b'); }
+  finally {
+    document.getElementById('search-icon').classList.remove('hidden');
+    document.getElementById('search-spinner').classList.add('hidden');
+  }
+}
+document.getElementById('search-btn').addEventListener('click', () => searchLocation(document.getElementById('search-input').value));
+document.getElementById('search-input').addEventListener('keydown', (e) => { if (e.key==='Enter') searchLocation(e.target.value); });
+
+// ── INIT ─────────────────────────────────────────────────
+pins.forEach(p => addMarkerToMap(p));
+renderPinList(); updateRouteLabels(); checkRouteReady();
+renderIconPicker(); renderColorPicker();
+
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(pos => {
+    map.flyTo([pos.coords.latitude, pos.coords.longitude], 14, { duration: 1.5 });
+  }, () => {});
+}
+</script>
+</body>
+</html>
