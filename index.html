@@ -539,9 +539,10 @@ function toggleTracking() {
 
         if (!userMarker) {
           const userIcon = L.divIcon({
-            className: 'user-loc-marker',
-            iconSize: [18, 18],
-            iconAnchor: [9, 9]
+            className: '',
+            html: `<div style="width: 16px; height: 16px; background-color: #3b82f6; border: 3px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px rgba(59, 130, 246, 0.9); animation: pulse 2s infinite;"></div>`,
+            iconSize: [16, 16],
+            iconAnchor: [8, 8]
           });
           userMarker = L.marker([lat, lng], { icon: userIcon, zIndexOffset: 1000 }).addTo(map);
           map.flyTo([lat, lng], 16, { duration: 1.5 });
@@ -551,14 +552,19 @@ function toggleTracking() {
         }
       },
       (err) => {
-        console.error(err);
-        showToast('⚠️ Gagal melacak lokasi', '#f43f5e');
-        toggleTracking(); // Reset UI jika error
+        console.error("Detail Error GPS:", err);
+        let pesanError = '⚠️ Gagal melacak lokasi';
+        if (err.code === 1) pesanError = '⚠️ Akses lokasi ditolak oleh browser';
+        else if (err.code === 2) pesanError = '⚠️ Titik lokasi tidak tersedia/sinyal lemah';
+        else if (err.code === 3) pesanError = '⚠️ Waktu pencarian lokasi habis (Timeout)';
+        
+        showToast(pesanError, '#f43f5e');
+        toggleTracking(); // Reset tombol kembali ke awal
       },
       { 
-        enableHighAccuracy: true,
-        maximumAge: 5000,
-        timeout: 10000
+        enableHighAccuracy: false, // Diset false agar ramah saat testing di PC/Laptop
+        maximumAge: 0,
+        timeout: 30000
       }
     );
   }
